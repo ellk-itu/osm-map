@@ -1,106 +1,134 @@
-import { OsmData } from "@/osmData/OsmData";
-import { TagWithChildren } from "@/types/osmData";
+import { TagTagData } from "@/types/osmData";
 import { invoke } from "@tauri-apps/api/core";
+import {
+  COLOR_NAMES,
+  colorConditions,
+  getColor,
+  LIGHT_VALUES,
+  strokeConditions,
+} from "./Style";
+import { getWayCache } from "./cache/cache";
 
 type Point = { x: number; y: number };
 
 export class MapRenderer {
-  osmData: OsmData;
+  public mouseDown: boolean;
+
   canvas: HTMLCanvasElement;
   context: CanvasRenderingContext2D;
-  viewportScale: Point;
-  coordSize: Point;
+  pos: Point;
+  scale: number;
+  init: () => void;
 
-  constructor(osmData: OsmData, canvas: HTMLCanvasElement) {
-    this.osmData = osmData;
+  constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
     this.context = canvas.getContext("2d") as CanvasRenderingContext2D;
-    this.coordSize = this.#getCoordtSize();
-    this.viewportScale = this.#getViewportScale();
-  }
+    this.mouseDown = false;
+    this.pos = { x: 0, y: 0 };
+    this.scale = 1;
 
-  #getCoordtSize(): Point {
-    const minlat = parseFloat(this.osmData.bounds.parameters["minlat"]);
-    const maxlat = parseFloat(this.osmData.bounds.parameters["maxlat"]);
-    const minlon = parseFloat(this.osmData.bounds.parameters["minlon"]);
-    const maxlon = parseFloat(this.osmData.bounds.parameters["maxlon"]);
-    return {
-      x: maxlon - minlon,
-      y: maxlat - minlat,
+    this.init = async () => {
+      window.addEventListener("mousemove", (e) => {
+        if (this.mouseDown) {
+          this.pos.x += e.movementX;
+          this.pos.y += e.movementY;
+          this.render();
+        }
+      });
+
+      canvas.addEventListener("wheel", (e) => {
+        if (!e.ctrlKey) {
+          this.scale += e.deltaY * 0.001;
+          this.render();
+          e.preventDefault();
+        }
+      });
+
+      await invoke("register_canvas", {
+        params: {
+          width: canvas.width,
+          height: canvas.height,
+        },
+      });
+
+      await invoke("parse_ways");
     };
+
+    this.init();
   }
 
-  #getViewportScale(): Point {
-    return {
-      x: this.canvas.width / this.coordSize.x,
-      y: this.canvas.height / this.coordSize.y,
-    };
-  }
-
-  #coordsToCanvas(tag: TagWithChildren): Point | null {
-    const minlat = parseFloat(this.osmData.bounds.parameters["minlat"]);
-    const minlon = parseFloat(this.osmData.bounds.parameters["minlon"]);
-
-    const lat = parseFloat(tag.parameters["lat"]);
-    const lon = parseFloat(tag.parameters["lon"]);
-
-    if (!lat && !lon) {
-      return null;
-    }
-
-    return {
-      x: (lon - minlon) * this.viewportScale.x,
-      y: (lat - minlat) * this.viewportScale.y,
-    };
-  }
-
-  drawNode(node: TagWithChildren) {
-    if (node.tag_type !== "node") {
-      throw new Error("node is not node");
-    }
-
-    const coord = this.#coordsToCanvas(node);
-
-    if (!coord) {
-      throw new Error("node does not have coordinates");
-    }
-
-    this.context.fillStyle = "rgb(200 0 0)";
-    this.context.fillRect(coord?.x, coord?.y, 10, 10);
-  }
-
-  async drawWay(way: TagWithChildren) {
-    if (way.tag_type !== "way") {
-      throw new Error("node is not node");
-    }
-
-    const nodes = await this.osmData.getNodesOfWay(way);
-
-    if (!nodes) {
-      throw new Error("Some shit went wrong");
-    }
-
-    this.context.lineWidth = 2;
-    this.context.fillStyle = "rgba(200,0,0,0.1)";
+  private async drawWay(
+    points: Uint32Array,
+    style: { color?: string; stroke?: { width: number; color: string } },
+  ) {
     this.context.beginPath();
 
-    const first = nodes.splice(0, 1)[0];
-    const firstCoords = this.#coordsToCanvas(first);
+    for (let i = 0; i < points.length; i += 2) {
+      const x = (points[i] + this.pos.x) * this.scale;
+      const y = (points[i + 1] + this.pos.y) * this.scale;
 
-    this.context.moveTo(firstCoords?.x ?? 0, firstCoords?.y ?? 0);
+      if (i == 0) {
+        this.context.moveTo(x, y);
+        continue;
+      }
 
-    for (let node of nodes) {
-      const nodeCoordinate = this.#coordsToCanvas(node);
-
-      if (!nodeCoordinate) continue;
-
-      this.context.lineTo(nodeCoordinate?.x, nodeCoordinate?.y);
+      this.context.lineTo(x, y);
     }
 
-    if (first.parameters["id"] == nodes[nodes.length - 1].parameters["id"]) {
+    if (
+      points[0] === points[points.length - 2] &&
+      points[1] === points[points.length - 1]
+    ) {
+      this.context.closePath();
+      this.context.fillStyle = style.color ?? "rgba(0,0,0,0)";
       this.context.fill();
     }
 
-    this.context.stroke();
+    if (style.stroke) {
+      this.context.lineWidth = style.stroke.width;
+      this.context.strokeStyle = style.stroke.color;
+      this.context.stroke();
+    }
+  }
+
+  private getFillStyle(tagTagData: TagTagData) {
+    for (let [condition, color] of colorConditions) {
+      if (condition(tagTagData)) {
+        return color;
+      }
+    }
+  }
+
+  private getStrokeStyle(tagTagData: TagTagData) {
+    for (let [condition, style] of strokeConditions) {
+      if (condition(tagTagData)) {
+        return style;
+      }
+    }
+  }
+
+  private async drawWays() {
+    const wayCacheArr = await getWayCache();
+
+    console.log("drawing");
+
+    for (let wayCache of wayCacheArr) {
+      const { linePositions, tagTagData } = wayCache;
+
+      this.drawWay(linePositions, {
+        color: this.getFillStyle(tagTagData),
+        stroke: this.getStrokeStyle(tagTagData),
+      });
+    }
+  }
+
+  private render() {
+    this.context.fillStyle = getColor(COLOR_NAMES["blue"], LIGHT_VALUES[200]);
+    this.context.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    this.drawWays();
+  }
+
+  start() {
+    this.render();
   }
 }

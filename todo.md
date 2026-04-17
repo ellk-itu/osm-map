@@ -1,0 +1,7 @@
+- [ ] Layers
+- [x] Zoom
+- [ ] LOD
+- [ ] Loading site
+- [x] Smaller Byte Size
+- [x] Flip y cordinate
+- [ ]

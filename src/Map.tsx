@@ -1,31 +1,39 @@
 import { createRef, useEffect } from "react";
-import { OsmData } from "./osmData/OsmData";
 import { MapRenderer } from "./mapRenderer/MapRenderer";
 
 interface MapProps extends React.ComponentProps<"canvas"> {
   width: number;
   height: number;
-  osmData: OsmData;
 }
 
 export default function (props: MapProps) {
   const canvasRef = createRef<HTMLCanvasElement>();
-  const osm = props.osmData;
   const renderRef = createRef<MapRenderer>();
-
   useEffect(() => {
     if (!canvasRef.current) {
       return;
     }
 
-    renderRef.current = new MapRenderer(osm, canvasRef.current);
+    renderRef.current = new MapRenderer(canvasRef.current);
+    renderRef.current.start();
 
-    for (let way of osm.ways) {
-      setTimeout(() => {
-        renderRef.current?.drawWay(way);
-      }, 1);
-    }
+    // for (let way of osm.ways) {
+    //   setTimeout(() => {
+    //     renderRef.current?.drawWay(way);
+    //   }, 1);
+    // }
   }, [canvasRef]);
 
-  return <canvas {...props} ref={canvasRef}></canvas>;
+  return (
+    <canvas
+      {...props}
+      ref={canvasRef}
+      onMouseDown={() =>
+        renderRef.current ? (renderRef.current.mouseDown = true) : null
+      }
+      onMouseUp={() => {
+        renderRef.current ? (renderRef.current.mouseDown = false) : null;
+      }}
+    ></canvas>
+  );
 }
