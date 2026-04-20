@@ -1,33 +1,13 @@
-use crate::common::{
-    enum_tools::Unwrap,
-    str_tools::{remove_first, remove_last},
-};
+use crate::common::str_tools::{remove_first, remove_last};
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
-use std::{any::Any, collections::HashMap};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum TagType {
-    TagData(TagData),
-    Bounds(Bounds),
-    Node(Node),
-    TagTag(TagTag),
-    Osm(Osm),
-    Member(Member),
-    Relation(Relation),
-    Xml(Xml),
-    Nd(Nd),
-    Way(Way),
-}
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TagData {
     pub(crate) tag_type: String,
     pub(crate) parameters: HashMap<String, String>,
     pub(crate) is_end_tag: bool,
-}
-
-pub trait FromTagData {
-    fn from_tag_data(data: TagData) -> Self;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,9 +18,9 @@ pub struct Bounds {
     pub(crate) max_lon: f64,
 }
 
-impl FromTagData for Bounds {
-    fn from_tag_data(data: TagData) -> Self {
-        return Bounds {
+impl Bounds {
+    pub fn new(data: TagData) -> Self {
+        return Self {
             min_lat: data
                 .parameters
                 .get("minlat")
@@ -80,11 +60,23 @@ pub struct Node {
     pub(crate) timestamp: String,
     pub(crate) visible: Option<bool>,
     pub(crate) uid: String,
+    pub(crate) tags: HashMap<String, String>,
 }
 
-impl FromTagData for Node {
-    fn from_tag_data(data: TagData) -> Self {
-        return Node {
+impl Node {
+    pub fn new(data: TagData, children: Vec<TagData>) -> Self {
+        let mut tags: HashMap<String, String> = HashMap::new();
+
+        for child in children {
+            if child.tag_type == "tag" {
+                tags.insert(
+                    child.parameters.get("k").unwrap().clone(),
+                    child.parameters.get("v").unwrap().clone(),
+                );
+            }
+        }
+
+        return Self {
             id: data.parameters.get("id").unwrap().clone(),
             lon: data.parameters.get("lon").unwrap().parse::<f64>().unwrap(),
             lat: data.parameters.get("lat").unwrap().parse::<f64>().unwrap(),
@@ -98,51 +90,7 @@ impl FromTagData for Node {
                 None
             },
             uid: data.parameters.get("uid").unwrap().clone(),
-        };
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TagTag {
-    pub(crate) k: String,
-    pub(crate) v: String,
-}
-
-impl FromTagData for TagTag {
-    fn from_tag_data(data: TagData) -> Self {
-        return TagTag {
-            k: data.parameters.get("k").unwrap().clone(),
-            v: data.parameters.get("v").unwrap().clone(),
-        };
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Member {
-    pub(crate) role: String,
-    pub(crate) r#type: String,
-    pub(crate) r#ref: String,
-}
-
-impl FromTagData for Member {
-    fn from_tag_data(data: TagData) -> Self {
-        return Member {
-            role: data.parameters.get("role").unwrap().clone(),
-            r#type: data.parameters.get("type").unwrap().clone(),
-            r#ref: data.parameters.get("ref").unwrap().clone(),
-        };
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Nd {
-    pub(crate) r#ref: String,
-}
-
-impl FromTagData for Nd {
-    fn from_tag_data(data: TagData) -> Self {
-        return Nd {
-            r#ref: data.parameters.get("ref").unwrap().clone(),
+            tags,
         };
     }
 }
@@ -156,11 +104,31 @@ pub struct Way {
     pub(crate) timestamp: String,
     pub(crate) visible: Option<bool>,
     pub(crate) uid: String,
+    pub(crate) tags: HashMap<String, String>,
+    pub(crate) node_refs: Vec<String>,
 }
 
-impl FromTagData for Way {
-    fn from_tag_data(data: TagData) -> Self {
-        return Way {
+impl Way {
+    pub fn new(data: TagData, children: Vec<TagData>) -> Self {
+        let mut tags: HashMap<String, String> = HashMap::new();
+        let mut node_refs: Vec<String> = vec![];
+
+        for child in children {
+            if child.tag_type == "tag" {
+                tags.insert(
+                    child.parameters.get("k").unwrap().clone(),
+                    child.parameters.get("v").unwrap().clone(),
+                );
+                continue;
+            }
+
+            if child.tag_type == "nd" {
+                node_refs.push(child.parameters.get("ref").unwrap().clone());
+                continue;
+            }
+        }
+
+        return Self {
             id: data.parameters.get("id").unwrap().clone(),
             user: data.parameters.get("user").unwrap().clone(),
             changeset: data.parameters.get("changeset").unwrap().clone(),
@@ -172,6 +140,42 @@ impl FromTagData for Way {
                 None
             },
             uid: data.parameters.get("uid").unwrap().clone(),
+            tags,
+            node_refs,
+        };
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MemberType {
+    Node,
+    Way,
+    Relation,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Member {
+    pub(crate) role: String,
+    pub(crate) r#type: MemberType,
+    pub(crate) r#ref: String,
+}
+
+impl Member {
+    pub fn new(data: TagData) -> Self {
+        let r#type = match data.parameters.get("type").unwrap().as_str() {
+            "node" => MemberType::Node,
+            "way" => MemberType::Way,
+            "relation" => MemberType::Relation,
+            _ => panic!(
+                "unknown type {}",
+                data.parameters.get("type").unwrap().as_str()
+            ),
+        };
+
+        return Self {
+            role: data.parameters.get("role").unwrap().clone(),
+            r#ref: data.parameters.get("ref").unwrap().clone(),
+            r#type,
         };
     }
 }
@@ -185,11 +189,31 @@ pub struct Relation {
     pub(crate) timestamp: String,
     pub(crate) visible: Option<bool>,
     pub(crate) uid: String,
+    pub(crate) members: Vec<Member>,
+    pub(crate) tags: HashMap<String, String>,
 }
 
-impl FromTagData for Relation {
-    fn from_tag_data(data: TagData) -> Self {
-        return Relation {
+impl Relation {
+    pub fn new(data: TagData, children: Vec<TagData>) -> Self {
+        let mut tags: HashMap<String, String> = HashMap::new();
+        let mut members: Vec<Member> = vec![];
+
+        for child in children {
+            if child.tag_type == "tag" {
+                tags.insert(
+                    child.parameters.get("k").unwrap().clone(),
+                    child.parameters.get("v").unwrap().clone(),
+                );
+                continue;
+            }
+
+            if child.tag_type == "member" {
+                members.push(Member::new(child));
+                continue;
+            }
+        }
+
+        return Self {
             id: data.parameters.get("id").unwrap().clone(),
             user: data.parameters.get("user").unwrap().clone(),
             changeset: data.parameters.get("changeset").unwrap().clone(),
@@ -201,6 +225,8 @@ impl FromTagData for Relation {
                 None
             },
             uid: data.parameters.get("uid").unwrap().clone(),
+            tags,
+            members,
         };
     }
 }
@@ -213,9 +239,9 @@ pub struct Osm {
     pub(crate) license: Option<String>,
 }
 
-impl FromTagData for Osm {
-    fn from_tag_data(data: TagData) -> Self {
-        return Osm {
+impl Osm {
+    pub fn new(data: TagData) -> Self {
+        return Self {
             version: data.parameters.get("version").unwrap().clone(),
             copyright: data.parameters.get("copyright").cloned(),
             attribution: data.parameters.get("attribution").cloned(),
@@ -230,16 +256,14 @@ pub struct Xml {
     pub(crate) encoding: String,
 }
 
-impl FromTagData for Xml {
-    fn from_tag_data(data: TagData) -> Self {
-        return Xml {
+impl Xml {
+    pub fn new(data: TagData) -> Self {
+        return Self {
             version: data.parameters.get("version").unwrap().clone(),
             encoding: data.parameters.get("version").unwrap().clone(),
         };
     }
 }
-
-pub type Tags = Vec<TagType>;
 
 /// Parses file into tags.
 ///
@@ -250,38 +274,9 @@ pub type Tags = Vec<TagType>;
 ///
 pub fn parse_tags(data: &str) -> Vec<TagData> {
     let tags: Vec<&str> = data.trim().split('>').collect();
-    let parsed_tags: Vec<TagData> = tags.iter().map(|tag| parse_tag(tag)).collect();
+    let parsed_tags: Vec<TagData> = tags.par_iter().map(|tag| parse_tag(tag)).collect();
 
     return parsed_tags;
-}
-
-/// Maps list of tags in enum types (see `osm::tag::TagType`)
-///
-/// Returns enum mapped list
-///
-/// ## Parameters
-///  * `tags`: The parsed tags (see: `parse_tags`)
-pub fn classify_tags(tags: &Vec<TagData>) -> Vec<TagType> {
-    tags.iter()
-        .map(|tag| {
-            if tag.parameters.len() <= 0 && tag.is_end_tag {
-                return TagType::TagData(tag.clone());
-            }
-
-            match tag.tag_type.as_str() {
-                "bounds" => TagType::Bounds(Bounds::from_tag_data(tag.clone())),
-                "node" => TagType::Node(Node::from_tag_data(tag.clone())),
-                "tag" => TagType::TagTag(TagTag::from_tag_data(tag.clone())),
-                "osm" => TagType::Osm(Osm::from_tag_data(tag.clone())),
-                "member" => TagType::Member(Member::from_tag_data(tag.clone())),
-                "relation" => TagType::Relation(Relation::from_tag_data(tag.clone())),
-                "?xml" => TagType::Xml(Xml::from_tag_data(tag.clone())),
-                "nd" => TagType::Nd(Nd::from_tag_data(tag.clone())),
-                "way" => TagType::Way(Way::from_tag_data(tag.clone())),
-                _ => TagType::TagData(tag.clone()),
-            }
-        })
-        .collect()
 }
 
 fn remove_end_tag_symbol(string: &str) -> &str {

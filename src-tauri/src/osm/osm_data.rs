@@ -3,9 +3,12 @@ use std::{
     sync::{LazyLock, RwLock, RwLockReadGuard},
 };
 
-use crate::osm::{
-    tag::{classify_tags, parse_tags, TagType, Way},
-    tree::{self, Tag, TagTree},
+use crate::{
+    common::dev::TimedProcess,
+    osm::{
+        tag::{parse_tags, Bounds, Node, Osm, Relation, TagData, Way, Xml},
+        tree::{self, TagTree},
+    },
 };
 use serde::{Deserialize, Serialize};
 
@@ -23,128 +26,89 @@ pub type TagTagData = HashMap<String, String>;
 ///
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct OsmData {
-    pub(crate) tags: Vec<TagType>,
-    pub(crate) osm_tag: Tag,
-
-    pub(crate) ways: Ways,
-    pub(crate) nodes: Nodes,
-
-    pub(crate) node_by_id: HashMap<String, Tag>,
-    pub(crate) ways_by_id: HashMap<String, Tag>,
+    pub(crate) xml: Xml,
+    pub(crate) osm: Osm,
+    pub(crate) bounds: Bounds,
+    pub(crate) nodes: HashMap<String, Node>,
+    pub(crate) ways: HashMap<String, Way>,
+    pub(crate) relations: HashMap<String, Relation>,
 }
 
 impl OsmData {
-    /// Gets the tag data from tag.
-    ///
-    /// returns the data from tag.
-    ///
-    /// ## Parameters
-    ///  * `tag`: The tag to point to the data (see: `osm::tree::tag`)
-    ///
-    pub fn data<'a>(&'a self, tag: &Tag) -> &'a TagType {
-        &self.tags[tag.0]
-    }
-
-    pub fn to_tags<'a>(
-        &'a self,
-        tags: &'a Vec<Box<Tag>>,
-    ) -> impl Iterator<Item = &'a TagType> + 'a {
-        tags.iter().map(move |tag| self.data(tag))
-    }
-
     /// Parses osm data from file, creating the tree and returning a new `OsmData()`
     ///
     /// ## Parameters
     ///  * `file`: file in utf-8 format
     ///
     pub fn from_file(file: &str) -> OsmData {
+        let osm_parsing = TimedProcess::start("Osm Parsing"); //Logging
+        let tag_parsing = TimedProcess::start("Tag Parsing"); //Logging
+
         let parsed_tags = parse_tags(file);
-        println!("Parsed tags");
+
+        tag_parsing.stop();
+        let tree_parsing = TimedProcess::start("Tree Parsing"); //Logging
+
         let tree = tree::from_tags(&parsed_tags);
-        println!("created tree");
-        let tags = classify_tags(&parsed_tags);
-        println!("classefied tags");
 
-        let osm_tag = tree
-            .iter()
-            .find(|tag| matches!(&tags[tag.0], TagType::Osm(_)))
-            .unwrap()
-            .clone();
+        tree_parsing.stop();
 
-        let nodes = osm_tag.filter_children(|tag| matches!(&tags[tag.0], TagType::Node(_)));
-        let ways = osm_tag.filter_children(|tag| matches!(&tags[tag.0], TagType::Way(_)));
+        let mut xml: Option<Xml> = None;
+        let mut osm: Option<Osm> = None;
+        let mut bounds: Option<Bounds> = None;
+        let mut nodes: HashMap<String, Node> = HashMap::new();
+        let mut ways: HashMap<String, Way> = HashMap::new();
+        let mut relations: HashMap<String, Relation> = HashMap::new();
 
-        let mut node_by_id: HashMap<String, Tag> = HashMap::new();
+        let specifics = TimedProcess::start("Specifics Parsing");
 
-        for node in &nodes {
-            let node_data = &tags[node.0];
-
-            if let TagType::Node(data) = node_data {
-                node_by_id.insert(data.id.clone(), *node.clone());
-            }
+        if &parsed_tags[0].tag_type == "?xml" {
+            xml = Some(Xml::new(parsed_tags[0].clone()));
         }
 
-        let mut ways_by_id: HashMap<String, Tag> = HashMap::new();
-
-        for way in &ways {
-            let way_data = &tags[way.0];
-
-            if let TagType::Node(data) = way_data {
-                ways_by_id.insert(data.id.clone(), *way.clone());
-            }
+        if &parsed_tags[1].tag_type == "osm" {
+            osm = Some(Osm::new(parsed_tags[1].clone()));
         }
 
-        println!("Finished osm parsing");
+        tree[1].1.iter().for_each(|tag| {
+            let tag_data = parsed_tags[tag.0].clone();
+            let children: Vec<TagData> =
+                tag.1.iter().map(|tag| parsed_tags[tag.0].clone()).collect();
 
-        return OsmData {
-            tags: tags.to_vec(),
-            ways,
-            nodes,
-            osm_tag: *osm_tag,
-            node_by_id,
-            ways_by_id,
-        };
-    }
-
-    pub fn get_ways(&self) -> Vec<(Way, TagTagData)> {
-        println!("Getting ways");
-        self.tags
-            .iter()
-            .filter_map(|tag| {
-                if let TagType::Way(way) = tag {
-                    Some(way.clone())
-                } else {
-                    None
+            match tag_data.tag_type.as_str() {
+                "node" => {
+                    let node = Node::new(tag_data.clone(), children);
+                    nodes.insert(node.id.clone(), node);
                 }
-            })
-            .map(|way| {
-                let tag = self
-                    .osm_tag
-                    .find_child(|tag| {
-                        let tag = self.data(tag);
-                        if let TagType::Way(tag) = tag {
-                            tag.id == way.id
-                        } else {
-                            false
-                        }
-                    })
-                    .unwrap();
-                (way, self.get_tagtags(*tag))
-            })
-            .collect::<Vec<(Way, TagTagData)>>()
-    }
-
-    pub fn get_tagtags(&self, tag: Tag) -> TagTagData {
-        let mut tag_tags: TagTagData = HashMap::new();
-
-        tag.1.iter().for_each(|tag| {
-            let tag = self.data(tag);
-            if let TagType::TagTag(tag_tag) = tag {
-                tag_tags.insert(tag_tag.k.clone(), tag_tag.v.clone());
+                "way" => {
+                    let way = Way::new(tag_data, children);
+                    ways.insert(way.id.clone(), way);
+                }
+                "relation" => {
+                    let relation = Relation::new(tag_data, children);
+                    relations.insert(relation.id.clone(), relation);
+                }
+                "bounds" => bounds = Some(Bounds::new(tag_data)),
+                _ => panic!(),
             }
         });
 
-        return tag_tags;
+        specifics.stop();
+
+        let xml = xml.unwrap();
+        let osm = osm.unwrap();
+        let bounds = bounds.unwrap();
+
+        osm_parsing.stop();
+
+        return Self {
+            xml,
+            osm,
+            bounds,
+            nodes,
+            ways,
+            relations,
+        };
     }
 }
 

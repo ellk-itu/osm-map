@@ -4,17 +4,55 @@ pub mod render;
 pub use register_canvas::register_canvas;
 use tauri::ipc::Response;
 
-use crate::{osm::osm_data::get_public_osmdata, render::render::get_public_render};
+use crate::{
+    common::point::Point, osm::osm_data::get_public_osmdata, render::render::get_public_render,
+};
 
 #[tauri::command]
-pub fn parse_ways() {
+pub fn get_viewport_coords(node_ids: Vec<String>) -> Response {
     let render_guard = get_public_render();
     let render = render_guard.as_ref().unwrap();
 
     let osm_guard = get_public_osmdata();
     let osm = osm_guard.as_ref().unwrap();
 
-    render.parse_way_points(osm);
+    let mut points: Vec<Point<u16>> = vec![];
+
+    for node_id in node_ids {
+        let node = osm.nodes.get(&node_id).unwrap();
+
+        points.push(render.translate_coordinates(node.lat, node.lon));
+    }
+
+    return Response::new(
+        points
+            .iter()
+            .map(|p| p.to_le_bytes())
+            .flatten()
+            .flatten()
+            .collect::<Vec<u8>>(),
+    );
+}
+
+#[tauri::command]
+pub fn get_viewport_coord(node_id: String) -> Response {
+    let render_guard = get_public_render();
+    let render = render_guard.as_ref().unwrap();
+
+    let osm_guard = get_public_osmdata();
+    let osm = osm_guard.as_ref().unwrap();
+
+    let node = osm.nodes.get(&node_id).unwrap();
+    let point = render.translate_coordinates(node.lat, node.lon);
+
+    return Response::new(
+        point
+            .to_le_bytes()
+            .iter()
+            .flatten()
+            .map(|n| *n)
+            .collect::<Vec<u8>>(),
+    );
 }
 
 #[tauri::command]

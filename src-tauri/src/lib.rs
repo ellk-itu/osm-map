@@ -10,10 +10,10 @@ pub fn run() {
             osm::parse_osm,
             osm::get_osm_test,
             osm::get_ways,
-            osm::get_tagtags,
+            osm::get_sorted_ways,
             render::register_canvas::register_canvas,
-            render::parse_ways,
-            render::get_way_points
+            render::get_way_points,
+            render::get_viewport_coords
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

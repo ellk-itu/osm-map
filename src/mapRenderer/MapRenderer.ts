@@ -1,4 +1,3 @@
-import { TagTagData } from "@/types/osmData";
 import { invoke } from "@tauri-apps/api/core";
 import {
   COLOR_NAMES,
@@ -7,7 +6,8 @@ import {
   LIGHT_VALUES,
   strokeConditions,
 } from "./Style";
-import { getWayCache } from "./cache/cache";
+import { wayCache } from "./cache/cache";
+import { Way } from "@/types/osmData";
 
 type Point = { x: number; y: number };
 
@@ -50,15 +50,13 @@ export class MapRenderer {
           height: canvas.height,
         },
       });
-
-      await invoke("parse_ways");
     };
 
     this.init();
   }
 
   private async drawWay(
-    points: Uint32Array,
+    points: Uint16Array,
     style: { color?: string; stroke?: { width: number; color: string } },
   ) {
     this.context.beginPath();
@@ -91,33 +89,37 @@ export class MapRenderer {
     }
   }
 
-  private getFillStyle(tagTagData: TagTagData) {
+  private getFillStyle(tags: Way["tags"]) {
     for (let [condition, color] of colorConditions) {
-      if (condition(tagTagData)) {
+      if (condition(tags)) {
         return color;
       }
     }
   }
 
-  private getStrokeStyle(tagTagData: TagTagData) {
+  private getStrokeStyle(tags: Way["tags"]) {
     for (let [condition, style] of strokeConditions) {
-      if (condition(tagTagData)) {
+      if (condition(tags)) {
         return style;
       }
     }
   }
 
   private async drawWays() {
-    const wayCacheArr = await getWayCache();
+    const ways = await wayCache.getCache();
+    const wayOrder = await invoke<string[][]>("get_sorted_ways");
 
-    console.log("drawing");
+    for (let way_id of wayOrder.flat()) {
+      const way = ways[way_id];
+      const coords = new Uint16Array(
+        await invoke<ArrayBuffer>("get_viewport_coords", {
+          nodeIds: way.node_refs,
+        }),
+      );
 
-    for (let wayCache of wayCacheArr) {
-      const { linePositions, tagTagData } = wayCache;
-
-      this.drawWay(linePositions, {
-        color: this.getFillStyle(tagTagData),
-        stroke: this.getStrokeStyle(tagTagData),
+      this.drawWay(coords, {
+        color: this.getFillStyle(way.tags),
+        stroke: this.getStrokeStyle(way.tags),
       });
     }
   }

@@ -9,9 +9,9 @@ use serde::{Deserialize, Serialize};
 ///  * `1`: children
 ///
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Tag(pub(crate) usize, pub(crate) TagTree);
+pub struct TagRef(pub(crate) usize, pub(crate) TagTree);
 
-impl Tag {
+impl TagRef {
     /// Find child of tag matching predicate
     ///
     /// Returns tag matching predicate if any
@@ -19,9 +19,9 @@ impl Tag {
     /// ## Parameters
     ///  * `predicate`: predicate to evaluate from
     ///
-    pub fn find_child<P>(&self, predicate: P) -> Option<Box<Tag>>
+    pub fn find_child<P>(&self, predicate: P) -> Option<Box<TagRef>>
     where
-        P: FnMut(&&Box<Tag>) -> bool,
+        P: FnMut(&&Box<TagRef>) -> bool,
     {
         let res = self.1.iter().find(predicate);
 
@@ -41,13 +41,13 @@ impl Tag {
     ///
     pub fn filter_children<P>(&self, predicate: P) -> TagTree
     where
-        P: FnMut(&&Box<Tag>) -> bool,
+        P: FnMut(&&Box<TagRef>) -> bool,
     {
         self.1.iter().filter(predicate).cloned().collect()
     }
 }
 
-pub type TagTree = Vec<Box<Tag>>;
+pub type TagTree = Vec<Box<TagRef>>;
 
 fn create_tree(tags: &[TagData], mut index: usize, parent_type: &String) -> TagTree {
     let mut return_arr: TagTree = vec![];
@@ -69,7 +69,7 @@ fn create_tree(tags: &[TagData], mut index: usize, parent_type: &String) -> TagT
 
         // If theres no children
         if tag.is_end_tag && parent.is_none() {
-            return_arr.push(Box::new(Tag(index - 1, vec![])));
+            return_arr.push(Box::new(TagRef(index - 1, vec![])));
             continue;
         }
 
@@ -94,7 +94,7 @@ fn create_tree(tags: &[TagData], mut index: usize, parent_type: &String) -> TagT
             let parent = parent.unwrap();
             let parent_index = parent_index.unwrap();
 
-            return_arr.push(Box::new(Tag(
+            return_arr.push(Box::new(TagRef(
                 parent_index,
                 create_tree(&tags, parent_index + 1, &parent.tag_type),
             )));
@@ -108,7 +108,7 @@ fn create_tree(tags: &[TagData], mut index: usize, parent_type: &String) -> TagT
     if !parent.is_none() {
         let parent_index = parent_index.unwrap();
 
-        return_arr.push(Box::new(Tag(
+        return_arr.push(Box::new(TagRef(
             parent_index,
             create_tree(&tags, parent_index + 1, &parent.unwrap().tag_type),
         )));

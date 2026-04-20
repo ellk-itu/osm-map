@@ -8,9 +8,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
     common::point::Point,
     osm::{
-        osm_data::get_public_osmdata,
-        tag::{TagType, Way},
-        tree::Tag,
+        osm_data::{self, get_public_osmdata},
+        tag::Way,
+        tree::TagRef,
         OsmData,
     },
 };
@@ -25,31 +25,22 @@ pub struct Render {
 
 impl Render {
     pub fn new(osm_data: &OsmData, viewport_size: Point<u32>) -> Render {
-        let bounds = osm_data.data(
-            &osm_data
-                .osm_tag
-                .find_child(|tag| matches!(osm_data.data(tag), TagType::Bounds(_)))
-                .unwrap(),
+        let bounds = &osm_data.bounds;
+
+        let coord_offset = Point(
+            bounds.max_lon - bounds.min_lon,
+            bounds.max_lat - bounds.min_lat,
         );
 
-        if let TagType::Bounds(bounds) = bounds {
-            let coord_offset = Point(
-                bounds.max_lon - bounds.min_lon,
-                bounds.max_lat - bounds.min_lat,
-            );
+        let min_bounds = Point::<f64>(bounds.min_lon, bounds.min_lat);
+        let max_bounds = Point::<f64>(bounds.max_lon, bounds.max_lat);
 
-            let min_bounds = Point::<f64>(bounds.min_lon, bounds.min_lat);
-            let max_bounds = Point::<f64>(bounds.max_lon, bounds.max_lat);
-
-            return Render {
-                viewport_size,
-                coord_offset,
-                min_bounds,
-                max_bounds,
-            };
-        } else {
-            panic!();
-        }
+        return Render {
+            viewport_size,
+            coord_offset,
+            min_bounds,
+            max_bounds,
+        };
     }
 
     fn viewport_scale(&self) -> Point<f64> {
@@ -59,61 +50,12 @@ impl Render {
         )
     }
 
-    pub fn translate_coordinates(&self, lat: f64, lon: f64) -> Point<f64> {
+    pub fn translate_coordinates(&self, lat: f64, lon: f64) -> Point<u16> {
         Point(
-            (lon - self.min_bounds.0) * self.viewport_scale().0,
-            (-(lat - self.min_bounds.1) * self.viewport_scale().1) + self.viewport_size.1 as f64,
+            ((lon - self.min_bounds.0) * self.viewport_scale().0) as u16,
+            ((-(lat - self.min_bounds.1) * self.viewport_scale().1) + self.viewport_size.1 as f64)
+                as u16,
         )
-    }
-
-    pub fn parse_way_points(&self, osm: &OsmData) {
-        let mut coords: HashMap<String, Vec<u16>> = HashMap::with_capacity(osm.ways.len());
-        for way in &osm.ways {
-            if let TagType::Way(data) = osm.data(&way) {
-                coords.insert(data.id.clone(), self.parse_way(&way));
-            }
-        }
-
-        set_way_coords(coords);
-    }
-
-    fn parse_way(&self, way: &Tag) -> Vec<u16> {
-        let guard = get_public_osmdata();
-        let osm = guard.as_ref().unwrap();
-
-        let nd_vec: Vec<String> = osm
-            .to_tags(&way.1)
-            .filter_map(|tag| {
-                if let TagType::Nd(t) = tag {
-                    return Some(t.r#ref.clone());
-                } else {
-                    return None;
-                }
-            })
-            .collect();
-
-        let nodes = nd_vec
-            .iter()
-            .map(|id| osm.node_by_id.get(id).unwrap())
-            .map(|tag| osm.data(tag));
-
-        let coords: Vec<Point<f64>> = nodes
-            .filter_map(|tag| {
-                if let TagType::Node(node) = tag {
-                    Some(self.translate_coordinates(node.lat, node.lon))
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        let mut mapped_coords: Vec<u16> = vec![];
-        coords.iter().for_each(|coord| {
-            mapped_coords.push(coord.0 as u16);
-            mapped_coords.push(coord.1 as u16);
-        });
-
-        return mapped_coords;
     }
 }
 
