@@ -1,4 +1,4 @@
-import { TagTagData } from "@/types/osmData";
+import { Way } from "@/types/osmData";
 
 export const LIGHT_VALUES = {
   "50": "50",
@@ -53,7 +53,7 @@ export const getColor = (
 };
 
 export const strokeConditions: [
-  (t: TagTagData) => boolean,
+  (t: Way["tags"]) => boolean,
   { width: number; color: string },
 ][] = [
   [
@@ -70,7 +70,7 @@ export const strokeConditions: [
   ],
 ];
 
-export const colorConditions: [(t: TagTagData) => boolean, string][] = [
+export const colorConditions: [(t: Way["tags"]) => boolean, string][] = [
   [
     (t) => t["place"] === "island",
     getColor(COLOR_NAMES["amber"], LIGHT_VALUES[100]),
